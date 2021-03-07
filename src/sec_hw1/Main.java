@@ -3,6 +3,8 @@ package sec_hw1;
 import javax.crypto.*;
 import java.io.*;
 import java.security.*;
+import java.util.Arrays;
+import java.util.HashMap;
 
 /* Информационная безопасность
  * Домашняя работа №1, вариант 1
@@ -158,15 +160,82 @@ public class Main {
     public static void decode(String filename) throws IOException {
         File file = openFile(filename);
         byte[] encodedBytes = getBytes(file);
-        byte[] decodedBytes = new byte[encodedBytes.length];
-    }
+        Block[] encodedBlocks = bytesToBlocks(encodedBytes);
 
-    public static byte[] decodeBytes(byte[] encodedBytes) throws IOException {
         byte[] translationBytes = getBytes(TRANSLATION_FILE);
-        byte[] decodedBytes = new byte[encodedBytes.length];
+        Block[] translationBlocks = bytesToBlocks(translationBytes);
+
+        HashMap<Block, Block> translationMap = new HashMap<>();
+        for (int i = 0; i < translationBlocks.length; i += 2) {
+            translationMap.put(translationBlocks[i], translationBlocks[i+1]);
+        }
+
+        Block[] decodedBlocks = new Block[encodedBlocks.length];
+        for (int i = 0; i < encodedBlocks.length; i++) {
+            decodedBlocks[i] = translationMap.get(encodedBlocks[i]);
+        }
+
+        byte[] decodedBytes = blocksToBytes(decodedBlocks);
+        byte[] originalBytes = removePadding(decodedBytes);
+        writeFile(file, originalBytes);
     }
 
-    public static byte[] removePadding(byte[] bytes) {
+    // Преобразовать массив блоков в массив байтов
+    public static byte[] blocksToBytes(Block[] blocks) {
+        byte[] bytes = new byte[blocks.length * BLOCK_SIZE];
+        for (int i = 0; i < blocks.length; i++) {
+            int start = i * BLOCK_SIZE;
+            for (int j = 0; j < BLOCK_SIZE; j++) {
+                bytes[start + j] = blocks[i].m_bytes[j];
+            }
+        }
+        return bytes;
+    }
 
+    // Преобразовать массив байтов в массив блоков
+    public static Block[] bytesToBlocks(byte[] bytes) throws IOException {
+        if (bytes.length % BLOCK_SIZE != 0) {
+            throw new IOException();
+        }
+        int numBlocks = bytes.length / BLOCK_SIZE;
+        Block[] blocks = new Block[numBlocks];
+        for (int i = 0; i < numBlocks; i++) {
+            int start = i * BLOCK_SIZE;
+            int end = start + BLOCK_SIZE;
+            byte[] range = Arrays.copyOfRange(bytes, start, end);
+            blocks[i] = new Block(range);
+        }
+        return blocks;
+    }
+
+    // Блок из байтов в количестве BLOCK_SIZE
+    private static class Block {
+        public byte[] m_bytes;
+
+        Block(byte[] bytes) {
+            m_bytes = bytes;
+        }
+
+        @Override
+        public boolean equals(Object o) {
+            if (this == o) return true;
+            if (o == null || getClass() != o.getClass()) return false;
+            Block block = (Block) o;
+            return Arrays.equals(m_bytes, block.m_bytes);
+        }
+
+        @Override
+        public int hashCode() {
+            return Arrays.hashCode(m_bytes);
+        }
+    }
+
+    // Убрать расширение
+    public static byte[] removePadding(byte[] paddedBytes) {
+        byte[] bytes = new byte[paddedBytes.length / BLOCK_SIZE];
+        for (int i = 0; i < bytes.length; i++) {
+            bytes[i] = paddedBytes[i * BLOCK_SIZE];
+        }
+        return bytes;
     }
 }
