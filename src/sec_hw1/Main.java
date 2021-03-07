@@ -10,8 +10,6 @@ import java.util.HashMap;
  * Домашняя работа №1, вариант 1
  * Сало Андрей, МЕН-472201 (МО-401) */
 
-// TODO собрать обработку всех исключений в Main
-
 public class Main {
     private static final int BLOCK_SIZE = 16;
     private static final File DICT_FILE = new File("Dictionary.matmex");
@@ -57,6 +55,82 @@ public class Main {
         }
     }
 
+    // Расширяет указанный исходный файл с данными и создаёт файл словаря
+    public static void prepare(String filename) throws IOException {
+        File file = openFile(filename);
+        byte[] bytes = getBytes(file);
+        byte[] paddedBytes = new byte[bytes.length * BLOCK_SIZE];
+        for (int i = 0; i < bytes.length; i++) {
+            int start = i * BLOCK_SIZE;
+            paddedBytes[start] = bytes[i];
+            for (int j = 1; j < BLOCK_SIZE; j++) {
+                paddedBytes[start + j] = 0;
+            }
+        }
+        writeFile(file, paddedBytes);
+        createDictionaryFile();
+    }
+
+    // Шифрует указанный расширенный файл и файл словаря AES со случайным ключом
+    public static void encode(String filename) throws IOException, NoSuchPaddingException, NoSuchAlgorithmException,
+            InvalidKeyException, BadPaddingException, IllegalBlockSizeException {
+        File file = openFile(filename);
+        Cipher cipher = createAndInitCipher();
+        encodeFile(file, cipher);
+        encodeFile(DICT_FILE, cipher);
+    }
+
+    // Выводит в отдельный файл таблицу сопоставления блоков шифртекста и блоков исходного текста, основываясь на словаре
+    // Формат выходного файла: ШИФРОВАННЫЙ_БЛОК1 БЛОК1 ШИФРОВАННЫЙ_БЛОК2 БЛОК2 и т.д.
+    public static void translate() throws IOException {
+        byte[] bytes = getBytes(DICT_FILE);
+        byte[] translationBytes = new byte[bytes.length * 2];
+        for (int i = 0; i < translationBytes.length; i++) {
+            translationBytes[i] = 0;
+        }
+        for (int i = 0; i < 256; i++) {
+            int originalEncodedStart = i * BLOCK_SIZE;
+            for (int j = 0; j < BLOCK_SIZE; j++) {
+                int tableEncodedStart = originalEncodedStart * 2;
+                int tableDecodedStart = tableEncodedStart + BLOCK_SIZE;
+                translationBytes[tableEncodedStart + j] = bytes[originalEncodedStart + j];
+                translationBytes[tableDecodedStart] = (byte)i;
+            }
+        }
+        writeFile(TRANSLATION_FILE, translationBytes);
+    }
+
+    // На основании таблицы сопоставления расшифровывает наш файл с данными, после чего убирает из него расширение
+    public static void decode(String filename) throws IOException {
+        File file = openFile(filename);
+        Block[] encodedBlocks = getBlocksFromFile(file);
+        Block[] translationBlocks = getBlocksFromFile(TRANSLATION_FILE);
+
+        HashMap<Block, Block> translationMap = makeTranslationMap(translationBlocks);
+        Block[] decodedBlocks = new Block[encodedBlocks.length];
+        for (int i = 0; i < encodedBlocks.length; i++) {
+            decodedBlocks[i] = translationMap.get(encodedBlocks[i]);
+        }
+        byte[] decodedBytes = blocksToBytes(decodedBlocks);
+        byte[] originalBytes = removePadding(decodedBytes);
+        writeFile(file, originalBytes);
+    }
+
+    // Извлечь данные из файла в виде блоков
+    public static Block[] getBlocksFromFile(File file) throws IOException {
+        byte[] bytes = getBytes(file);
+        return bytesToBlocks(bytes);
+    }
+
+    // Восстановить таблицу сопоставления из файла на основе HashMap
+    public static HashMap<Block, Block> makeTranslationMap(Block[] translationBlocks) {
+        HashMap<Block, Block> translationMap = new HashMap<>();
+        for (int i = 0; i < translationBlocks.length; i += 2) {
+            translationMap.put(translationBlocks[i], translationBlocks[i+1]);
+        }
+        return translationMap;
+    }
+
     // Извлечение содержимого файла в виде массива байтов
     public static byte[] getBytes(File file) throws IOException {
         try (BufferedInputStream bis = new BufferedInputStream(new FileInputStream(file))) {
@@ -84,37 +158,13 @@ public class Main {
         writeFile(DICT_FILE, bytes);
     }
 
+    // Проверить наличие файла и открыть его
     public static File openFile(String filename) throws FileNotFoundException {
         File file = new File(filename);
         if (!file.exists()) {
             throw new FileNotFoundException();
         }
         return file;
-    }
-
-    // Расширяет указанный исходный файл с данными и создаёт файл словаря
-    public static void prepare(String filename) throws IOException {
-        File file = openFile(filename);
-        byte[] bytes = getBytes(file);
-        byte[] paddedBytes = new byte[bytes.length * BLOCK_SIZE];
-        for (int i = 0; i < bytes.length; i++) {
-            int start = i * BLOCK_SIZE;
-            paddedBytes[start] = bytes[i];
-            for (int j = 1; j < BLOCK_SIZE; j++) {
-                paddedBytes[start + j] = 0;
-            }
-        }
-        writeFile(file, paddedBytes);
-        createDictionaryFile();
-    }
-
-    // Шифрует указанный расширенный файл и файл словаря AES со случайным ключом
-    public static void encode(String filename) throws IOException, NoSuchPaddingException, NoSuchAlgorithmException,
-            InvalidKeyException, BadPaddingException, IllegalBlockSizeException {
-        File file = openFile(filename);
-        Cipher cipher = createAndInitCipher();
-        encodeFile(file, cipher);
-        encodeFile(DICT_FILE, cipher);
     }
 
     // Создание и инициализация шифра AES в режиме электронной кодовой книги
@@ -134,50 +184,6 @@ public class Main {
         byte[] bytes = getBytes(file);
         byte[] encodedBytes = cipher.doFinal(bytes);
         writeFile(file, encodedBytes);
-    }
-
-    // Выводит в отдельный файл таблицу сопоставления блоков шифртекста и блоков исходного текста, основываясь на словаре
-    // Формат выходного файла: ШИФРОВАННЫЙ_БЛОК1 БЛОК1 ШИФРОВАННЫЙ_БЛОК2 БЛОК2 и т.д.
-    public static void translate() throws IOException {
-        byte[] bytes = getBytes(DICT_FILE);
-        byte[] translationBytes = new byte[bytes.length * 2];
-        for (int i = 0; i < translationBytes.length; i++) {
-            translationBytes[i] = 0;
-        }
-        for (int i = 0; i < 256; i++) {
-            int originalEncodedStart = i * BLOCK_SIZE;
-            for (int j = 0; j < BLOCK_SIZE; j++) {
-                int tableEncodedStart = originalEncodedStart * 2;
-                int tableDecodedStart = tableEncodedStart + BLOCK_SIZE;
-                translationBytes[tableEncodedStart + j] = bytes[originalEncodedStart + j];
-                translationBytes[tableDecodedStart] = (byte)i;
-            }
-        }
-        writeFile(TRANSLATION_FILE, translationBytes);
-    }
-
-    // На основании таблицы сопоставления расшифровывает наш файл с данными, после чего убирает из него расширение
-    public static void decode(String filename) throws IOException {
-        File file = openFile(filename);
-        byte[] encodedBytes = getBytes(file);
-        Block[] encodedBlocks = bytesToBlocks(encodedBytes);
-
-        byte[] translationBytes = getBytes(TRANSLATION_FILE);
-        Block[] translationBlocks = bytesToBlocks(translationBytes);
-
-        HashMap<Block, Block> translationMap = new HashMap<>();
-        for (int i = 0; i < translationBlocks.length; i += 2) {
-            translationMap.put(translationBlocks[i], translationBlocks[i+1]);
-        }
-
-        Block[] decodedBlocks = new Block[encodedBlocks.length];
-        for (int i = 0; i < encodedBlocks.length; i++) {
-            decodedBlocks[i] = translationMap.get(encodedBlocks[i]);
-        }
-
-        byte[] decodedBytes = blocksToBytes(decodedBlocks);
-        byte[] originalBytes = removePadding(decodedBytes);
-        writeFile(file, originalBytes);
     }
 
     // Преобразовать массив блоков в массив байтов
