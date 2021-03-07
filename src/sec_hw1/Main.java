@@ -12,8 +12,31 @@ import java.util.HashMap;
 
 public class Main {
     private static final int BLOCK_SIZE = 16;
+    private static final int DICT_SIZE = 256;
     private static final File DICT_FILE = new File("Dictionary.matmex");
     private static final File TRANSLATION_FILE = new File("Translation.matmex");
+
+    // Блок из нескольких байтов
+    private static class Block {
+        public byte[] m_bytes;
+
+        Block(byte[] bytes) {
+            m_bytes = bytes;
+        }
+
+        @Override
+        public boolean equals(Object o) {
+            if (this == o) return true;
+            if (o == null || getClass() != o.getClass()) return false;
+            Block block = (Block) o;
+            return Arrays.equals(m_bytes, block.m_bytes);
+        }
+
+        @Override
+        public int hashCode() {
+            return Arrays.hashCode(m_bytes);
+        }
+    }
 
     public static void main(String[] args) {
         if (args.length != 2 && !(args.length == 1 && args[0].equals("translate"))) {
@@ -42,8 +65,7 @@ public class Main {
         catch (FileNotFoundException ex) {
             System.out.println("Error: file doesn't exist");
             ex.printStackTrace();
-        }
-        catch (IOException ex) {
+        } catch (IOException ex) {
             System.out.println("Error: I/O exception");
             ex.printStackTrace();
         } catch (NoSuchPaddingException | NoSuchAlgorithmException ex) {
@@ -59,15 +81,8 @@ public class Main {
     public static void prepare(String filename) throws IOException {
         File file = openFile(filename);
         byte[] bytes = getBytes(file);
-        byte[] paddedBytes = new byte[bytes.length * BLOCK_SIZE];
-        for (int i = 0; i < bytes.length; i++) {
-            int start = i * BLOCK_SIZE;
-            paddedBytes[start] = bytes[i];
-            for (int j = 1; j < BLOCK_SIZE; j++) {
-                paddedBytes[start + j] = 0;
-            }
-        }
-        writeFile(file, paddedBytes);
+        Block[] paddedBlocks = padToBlocks(bytes);
+        writeFile(file, blocksToBytes(paddedBlocks));
         createDictionaryFile();
     }
 
@@ -83,21 +98,14 @@ public class Main {
     // Выводит в отдельный файл таблицу сопоставления блоков шифртекста и блоков исходного текста, основываясь на словаре
     // Формат выходного файла: ШИФРОВАННЫЙ_БЛОК1 БЛОК1 ШИФРОВАННЫЙ_БЛОК2 БЛОК2 и т.д.
     public static void translate() throws IOException {
-        byte[] bytes = getBytes(DICT_FILE);
-        byte[] translationBytes = new byte[bytes.length * 2];
-        for (int i = 0; i < translationBytes.length; i++) {
-            translationBytes[i] = 0;
+        Block[] encodedDictBlocks = getBlocksFromFile(DICT_FILE);
+        Block[] originalDictBlocks = getDictionaryBlocks();
+        Block[] translationBlocks = new Block[encodedDictBlocks.length + originalDictBlocks.length];
+        for (int i = 0; i < encodedDictBlocks.length; i++) {
+            translationBlocks[i*2] = encodedDictBlocks[i];
+            translationBlocks[i*2+1] = originalDictBlocks[i];
         }
-        for (int i = 0; i < 256; i++) {
-            int originalEncodedStart = i * BLOCK_SIZE;
-            for (int j = 0; j < BLOCK_SIZE; j++) {
-                int tableEncodedStart = originalEncodedStart * 2;
-                int tableDecodedStart = tableEncodedStart + BLOCK_SIZE;
-                translationBytes[tableEncodedStart + j] = bytes[originalEncodedStart + j];
-                translationBytes[tableDecodedStart] = (byte)i;
-            }
-        }
-        writeFile(TRANSLATION_FILE, translationBytes);
+        writeFile(TRANSLATION_FILE, blocksToBytes(translationBlocks));
     }
 
     // На основании таблицы сопоставления расшифровывает наш файл с данными, после чего убирает из него расширение
@@ -116,10 +124,49 @@ public class Main {
         writeFile(file, originalBytes);
     }
 
-    // Извлечь данные из файла в виде блоков
-    public static Block[] getBlocksFromFile(File file) throws IOException {
+    // Расширить каждый байт до блока размером BLOCK_SIZE байтов
+    public static Block[] padToBlocks(byte[] bytes) {
+        Block[] blocks = new Block[bytes.length];
+        for (int i = 0; i < bytes.length; i++) {
+            byte[] blockBytes = new byte[BLOCK_SIZE];
+            blockBytes[0] = bytes[i];
+            blocks[i] = new Block(blockBytes);
+        }
+        return blocks;
+    }
+
+    // Создание файла словаря
+    public static void createDictionaryFile() throws IOException {
+        Block[] blocks = getDictionaryBlocks();
+        writeFile(DICT_FILE, blocksToBytes(blocks));
+    }
+
+    // Получить стандартное содержимое файла словаря в виде блоков
+    public static Block[] getDictionaryBlocks() {
+        byte[] bytes = new byte[DICT_SIZE];
+        for (int i = 0; i < DICT_SIZE; i++) {
+            bytes[i] = (byte)i;
+        }
+        return padToBlocks(bytes);
+    }
+
+    // Создание и инициализация шифра AES в режиме электронной кодовой книги
+    public static Cipher createAndInitCipher() throws NoSuchPaddingException,
+            NoSuchAlgorithmException, InvalidKeyException {
+        Cipher cipher = Cipher.getInstance("AES/ECB/NoPadding");
+        KeyGenerator keyGenerator = KeyGenerator.getInstance("AES");
+        keyGenerator.init(256, new SecureRandom());
+        SecretKey secretKey = keyGenerator.generateKey();
+        cipher.init(Cipher.ENCRYPT_MODE, secretKey);
+        return cipher;
+    }
+
+    // Шифрование отдельного файла с помощью выбранного шифра
+    public static void encodeFile(File file, Cipher cipher) throws IOException,
+            BadPaddingException, IllegalBlockSizeException {
         byte[] bytes = getBytes(file);
-        return bytesToBlocks(bytes);
+        byte[] encodedBytes = cipher.doFinal(bytes);
+        writeFile(file, encodedBytes);
     }
 
     // Восстановить таблицу сопоставления из файла на основе HashMap
@@ -131,31 +178,13 @@ public class Main {
         return translationMap;
     }
 
-    // Извлечение содержимого файла в виде массива байтов
-    public static byte[] getBytes(File file) throws IOException {
-        try (BufferedInputStream bis = new BufferedInputStream(new FileInputStream(file))) {
-            return bis.readAllBytes();
+    // Убрать расширение
+    public static byte[] removePadding(byte[] paddedBytes) {
+        byte[] bytes = new byte[paddedBytes.length / BLOCK_SIZE];
+        for (int i = 0; i < bytes.length; i++) {
+            bytes[i] = paddedBytes[i * BLOCK_SIZE];
         }
-    }
-
-    // Перезапись файла выбранными байтами
-    public static void writeFile(File file, byte[] bytes) throws IOException {
-        try (BufferedOutputStream bos = new BufferedOutputStream(new FileOutputStream(file, false))) {
-            bos.write(bytes);
-        }
-    }
-
-    // Создание файла словаря
-    public static void createDictionaryFile() throws IOException {
-        byte[] bytes = new byte[256 * BLOCK_SIZE];
-        for (int i = 0; i < 256; i++) {
-            int start = i * BLOCK_SIZE;
-            bytes[start] = (byte)i;
-            for (int j = 1; j < BLOCK_SIZE; j++) {
-                bytes[start + j] = 0;
-            }
-        }
-        writeFile(DICT_FILE, bytes);
+        return bytes;
     }
 
     // Проверить наличие файла и открыть его
@@ -167,23 +196,24 @@ public class Main {
         return file;
     }
 
-    // Создание и инициализация шифра AES в режиме электронной кодовой книги
-    public static Cipher createAndInitCipher() throws NoSuchPaddingException,
-            NoSuchAlgorithmException, InvalidKeyException {
-        Cipher cipher = null;
-        cipher = Cipher.getInstance("AES/ECB/NoPadding");
-        KeyGenerator keyGenerator = KeyGenerator.getInstance("AES");
-        keyGenerator.init(256, new SecureRandom());
-        SecretKey secretKey = keyGenerator.generateKey();
-        cipher.init(Cipher.ENCRYPT_MODE, secretKey);
-        return cipher;
+    // Извлечение содержимого файла в виде массива байтов
+    public static byte[] getBytes(File file) throws IOException {
+        try (BufferedInputStream bis = new BufferedInputStream(new FileInputStream(file))) {
+            return bis.readAllBytes();
+        }
     }
 
-    // Шифрование отдельного файла с помощью выбранного шифра
-    public static void encodeFile(File file, Cipher cipher) throws IOException, BadPaddingException, IllegalBlockSizeException {
+    // Извлечь данные из файла в виде массива блоков
+    public static Block[] getBlocksFromFile(File file) throws IOException {
         byte[] bytes = getBytes(file);
-        byte[] encodedBytes = cipher.doFinal(bytes);
-        writeFile(file, encodedBytes);
+        return bytesToBlocks(bytes);
+    }
+
+    // Перезапись файла выбранными байтами
+    public static void writeFile(File file, byte[] bytes) throws IOException {
+        try (BufferedOutputStream bos = new BufferedOutputStream(new FileOutputStream(file, false))) {
+            bos.write(bytes);
+        }
     }
 
     // Преобразовать массив блоков в массив байтов
@@ -191,9 +221,7 @@ public class Main {
         byte[] bytes = new byte[blocks.length * BLOCK_SIZE];
         for (int i = 0; i < blocks.length; i++) {
             int start = i * BLOCK_SIZE;
-            for (int j = 0; j < BLOCK_SIZE; j++) {
-                bytes[start + j] = blocks[i].m_bytes[j];
-            }
+            System.arraycopy(blocks[i].m_bytes, 0, bytes, start, BLOCK_SIZE);
         }
         return bytes;
     }
@@ -212,36 +240,5 @@ public class Main {
             blocks[i] = new Block(range);
         }
         return blocks;
-    }
-
-    // Блок из байтов в количестве BLOCK_SIZE
-    private static class Block {
-        public byte[] m_bytes;
-
-        Block(byte[] bytes) {
-            m_bytes = bytes;
-        }
-
-        @Override
-        public boolean equals(Object o) {
-            if (this == o) return true;
-            if (o == null || getClass() != o.getClass()) return false;
-            Block block = (Block) o;
-            return Arrays.equals(m_bytes, block.m_bytes);
-        }
-
-        @Override
-        public int hashCode() {
-            return Arrays.hashCode(m_bytes);
-        }
-    }
-
-    // Убрать расширение
-    public static byte[] removePadding(byte[] paddedBytes) {
-        byte[] bytes = new byte[paddedBytes.length / BLOCK_SIZE];
-        for (int i = 0; i < bytes.length; i++) {
-            bytes[i] = paddedBytes[i * BLOCK_SIZE];
-        }
-        return bytes;
     }
 }
