@@ -11,37 +11,37 @@ import java.security.*;
 // TODO собрать обработку всех исключений в Main
 
 public class Main {
-    private static final File DICT_FILE = new File("Dictionary.matmex");
     private static final int BLOCK_SIZE = 16;
+    private static final File DICT_FILE = new File("Dictionary.matmex");
+    private static final File TRANSLATION_FILE = new File("Translation.matmex");
 
     public static void main(String[] args) {
-        if (args.length != 2) {
+        if (args.length != 2 && !(args.length == 1 && args[0].equals("translate"))) {
             System.out.println("Error: incorrect syntax");
-            return;
-        }
-        File file = new File(args[1]);
-        if (!file.exists()) {
-            System.out.println("Error: file doesn't exist");
             return;
         }
         try {
             switch (args[0]) {
                 case "prepare":
-                    prepare(file);
+                    prepare(args[1]);
                     break;
                 case "encode":
-                    encode(file);
+                    encode(args[1]);
                     break;
                 case "translate":
-                    translate(file);
+                    translate();
                     break;
                 case "decode":
-                    decode(file);
+                    decode(args[1]);
                     break;
                 default:
                     System.out.println("Error: incorrect command");
                     break;
             }
+        }
+        catch (FileNotFoundException ex) {
+            System.out.println("Error: file doesn't exist");
+            ex.printStackTrace();
         }
         catch (IOException ex) {
             System.out.println("Error: I/O exception");
@@ -82,8 +82,17 @@ public class Main {
         writeFile(DICT_FILE, bytes);
     }
 
+    public static File openFile(String filename) throws FileNotFoundException {
+        File file = new File(filename);
+        if (!file.exists()) {
+            throw new FileNotFoundException();
+        }
+        return file;
+    }
+
     // Расширяет указанный исходный файл с данными и создаёт файл словаря
-    public static void prepare(File file) throws IOException {
+    public static void prepare(String filename) throws IOException {
+        File file = openFile(filename);
         byte[] bytes = getBytes(file);
         byte[] paddedBytes = new byte[bytes.length * BLOCK_SIZE];
         for (int i = 0; i < bytes.length; i++) {
@@ -98,8 +107,9 @@ public class Main {
     }
 
     // Шифрует указанный расширенный файл и файл словаря AES со случайным ключом
-    public static void encode(File file) throws IOException, NoSuchPaddingException, NoSuchAlgorithmException,
+    public static void encode(String filename) throws IOException, NoSuchPaddingException, NoSuchAlgorithmException,
             InvalidKeyException, BadPaddingException, IllegalBlockSizeException {
+        File file = openFile(filename);
         Cipher cipher = createAndInitCipher();
         encodeFile(file, cipher);
         encodeFile(DICT_FILE, cipher);
@@ -125,13 +135,38 @@ public class Main {
     }
 
     // Выводит в отдельный файл таблицу сопоставления блоков шифртекста и блоков исходного текста, основываясь на словаре
-    public static void translate(File file) {
+    // Формат выходного файла: ШИФРОВАННЫЙ_БЛОК1 БЛОК1 ШИФРОВАННЫЙ_БЛОК2 БЛОК2 и т.д.
+    public static void translate() throws IOException {
         byte[] bytes = getBytes(DICT_FILE);
-
+        byte[] translationBytes = new byte[bytes.length * 2];
+        for (int i = 0; i < translationBytes.length; i++) {
+            translationBytes[i] = 0;
+        }
+        for (int i = 0; i < 256; i++) {
+            int originalEncodedStart = i * BLOCK_SIZE;
+            for (int j = 0; j < BLOCK_SIZE; j++) {
+                int tableEncodedStart = originalEncodedStart * 2;
+                int tableDecodedStart = tableEncodedStart + BLOCK_SIZE;
+                translationBytes[tableEncodedStart + j] = bytes[originalEncodedStart + j];
+                translationBytes[tableDecodedStart] = (byte)i;
+            }
+        }
+        writeFile(TRANSLATION_FILE, translationBytes);
     }
 
     // На основании таблицы сопоставления расшифровывает наш файл с данными, после чего убирает из него расширение
-    public static void decode(File file) throws IOException {
+    public static void decode(String filename) throws IOException {
+        File file = openFile(filename);
+        byte[] encodedBytes = getBytes(file);
+        byte[] decodedBytes = new byte[encodedBytes.length];
+    }
+
+    public static byte[] decodeBytes(byte[] encodedBytes) throws IOException {
+        byte[] translationBytes = getBytes(TRANSLATION_FILE);
+        byte[] decodedBytes = new byte[encodedBytes.length];
+    }
+
+    public static byte[] removePadding(byte[] bytes) {
 
     }
 }
